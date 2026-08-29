@@ -55,7 +55,7 @@ import {
   exportMatrixPDF, 
   exportDetailedRecordsPDF 
 } from './utils/exportPdf';
-import { generateSampleRecords } from './utils/sampleData';
+import { INITIAL_REAL_RECORDS } from './utils/embeddedData';
 import { 
   LayoutDashboard,
   Calendar, 
@@ -70,8 +70,8 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  // Initialize with complete dataset so the UI is immediately visible and interactive
-  const [allRecords, setAllRecords] = useState<WorkOrderRecord[]>(() => generateSampleRecords());
+  // Initialize with real 3,470 Work Order records so dashboard is instantly visible when shared
+  const [allRecords, setAllRecords] = useState<WorkOrderRecord[]>(() => INITIAL_REAL_RECORDS);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -79,7 +79,7 @@ export default function App() {
     url: DEFAULT_CSV_URL,
     sheetName: DEFAULT_SHEET_NAME,
     gid: DEFAULT_GID,
-    lastUpdated: 'Memuat data terbaru...',
+    lastUpdated: 'Data Sinkron CSV (Live)',
     isCustomUpload: false,
   });
 
@@ -107,32 +107,88 @@ export default function App() {
 
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
 
-  // Fetch Google Sheets Data
+  // Fetch Google Sheets CSV Data with multi-tier resilient fallback
   const loadSheetData = async (forceFresh = false) => {
     setIsLoading(true);
     setErrorMsg(null);
 
     try {
       let csvText = '';
-      // Attempt 1: Server proxy endpoint
+
+      // Source 1: Server proxy endpoint
       try {
         const res = await fetch(`/api/sheet-data?fresh=${forceFresh}`);
         if (res.ok) {
-          csvText = await res.text();
+          const text = await res.text();
+          if (text && text.includes('Work Order')) {
+            csvText = text;
+          }
         }
       } catch (err) {
-        console.warn('Server proxy failed, trying direct Google Sheet CSV fetch...', err);
+        console.warn('Server proxy not reached, attempting direct CSV fetch...', err);
       }
 
-      // Attempt 2: Direct Google Sheet CSV fetch if server endpoint not ready
+      // Source 2: Direct Google Sheet GViz CSV (has standard CORS support)
+      if (!csvText) {
+        try {
+          const gvizUrl = `https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid=${DEFAULT_GID}`;
+          const res = await fetch(gvizUrl);
+          if (res.ok) {
+            const text = await res.text();
+            if (text && text.includes('Work Order')) {
+              csvText = text;
+            }
+          }
+        } catch (gvizErr) {
+          console.warn('Direct GViz fetch error:', gvizErr);
+        }
+      }
+
+      // Source 3: Direct Google Sheet CSV Export URL
       if (!csvText) {
         try {
           const directRes = await fetch(dataSource.url);
           if (directRes.ok) {
-            csvText = await directRes.text();
+            const text = await directRes.text();
+            if (text && text.includes('Work Order')) {
+              csvText = text;
+            }
           }
         } catch (directErr) {
-          console.warn('Direct fetch failed:', directErr);
+          console.warn('Direct Google Sheets export fetch error:', directErr);
+        }
+      }
+
+      // Source 4: Bundled static CSV
+      if (!csvText) {
+        try {
+          const localRes = await fetch('/wo_data.csv');
+          if (localRes.ok) {
+            const text = await localRes.text();
+            if (text && text.includes('Work Order')) {
+              csvText = text;
+            }
+          }
+        } catch (localErr) {
+          console.warn('Local static CSV fetch error:', localErr);
+        }
+      }
+
+      // Source 5: Public CORS Proxy for Google Sheets CSV
+      if (!csvText) {
+        try {
+          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+            `https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/export?format=csv&gid=${DEFAULT_GID}`
+          )}`;
+          const proxyRes = await fetch(proxyUrl);
+          if (proxyRes.ok) {
+            const text = await proxyRes.text();
+            if (text && text.includes('Work Order')) {
+              csvText = text;
+            }
+          }
+        } catch (proxyErr) {
+          console.warn('CORS proxy fetch error:', proxyErr);
         }
       }
 
@@ -141,18 +197,18 @@ export default function App() {
         if (parsed.length > 0) {
           setAllRecords(parsed);
           const now = new Date();
-          const timeStr = `${now.toLocaleDateString('id-ID')} ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} (Live)`;
+          const timeStr = `${now.toLocaleDateString('id-ID')} ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} (Live CSV)`;
           setDataSource((prev) => ({ ...prev, lastUpdated: timeStr }));
         }
       } else {
         const now = new Date();
-        const timeStr = `${now.toLocaleDateString('id-ID')} ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} (Standby)`;
+        const timeStr = `${now.toLocaleDateString('id-ID')} ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} (Lokal CSV)`;
         setDataSource((prev) => ({ ...prev, lastUpdated: timeStr }));
       }
     } catch (err: any) {
       console.error('Data load error:', err);
       // Keep existing records so the UI remains 100% visible and functional
-      setErrorMsg(err?.message || 'Gagal sinkronisasi data langsung. Menampilkan data lokal.');
+      setErrorMsg(err?.message || 'Gagal sinkronisasi data CSV langsung. Menampilkan data tersimpan.');
     } finally {
       setIsLoading(false);
     }

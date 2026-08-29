@@ -29,21 +29,44 @@ async function startServer() {
 
       const now = Date.now();
       if (!forceFresh && cachedData && now - cachedData.timestamp < CACHE_TTL_MS && sheetId === DEFAULT_SPREADSHEET_ID && gid === DEFAULT_GID) {
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
         return res.send(cachedData.csv);
       }
 
-      const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
-      const response = await fetch(csvUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-      });
+      let csvText = '';
+      const csvUrl1 = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+      const csvUrl2 = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`;
 
-      if (!response.ok) {
-        throw new Error(`Google Sheets responded with HTTP status ${response.status}: ${response.statusText}`);
+      try {
+        const response = await fetch(csvUrl1, {
+          redirect: 'follow',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+        });
+        if (response.ok) {
+          csvText = await response.text();
+        }
+      } catch (e) {
+        console.warn('Export format=csv failed, trying gviz...', e);
       }
 
-      const csvText = await response.text();
+      if (!csvText || csvText.includes('<HTML>')) {
+        const response2 = await fetch(csvUrl2, {
+          redirect: 'follow',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+        });
+        if (response2.ok) {
+          csvText = await response2.text();
+        }
+      }
+
+      if (!csvText) {
+        throw new Error('Tidak dapat mengunduh data CSV dari Google Sheets.');
+      }
+
       if (sheetId === DEFAULT_SPREADSHEET_ID && gid === DEFAULT_GID) {
         cachedData = {
           csv: csvText,
